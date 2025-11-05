@@ -41,7 +41,13 @@ except Exception:
 # -----------------------------
 POSES = {
     "Home":  [59.8, -215.9, 354.6, -175.33, 8.65, 86.68],  # 시작/대기 위치
-    "Place": [-16.08, 84.01, -15.20, 3.86, -86.39, -16.96],  # 예: 내려둘 위치
+    "Place": [105.8, -65.0, 483.4, -116.46, 4.87, -78.69],  # 예: 내려둘 위치
+    "Box1": [291.3, 210.0, 200, -172.57, -1.46, -87.15],  # 예: 내려둘 위치
+    "Box2": [333.4, 11.7, 200, -175.19, -0.08, -89.53],  # 예: 내려둘 위치
+    "Box3": [319.9, -169.5, 200, -172.32, -2.86, -87.15],  # 예: 내려둘 위치
+    "Box1_up": [229.8, 132.6, 386.4, -147.34, 9.15, -74.66],  # 예: 내려둘 위치
+    "Box2_up": [264.0, -1.3, 379.0, -153.71, 11.7, -106.33],  # 예: 내려둘 위치
+    "Box3_up": [228.0, -203.0, 362.8, -146.13, 15.2, -149.53],  # 예: 내려둘 위치
 }
 
 # 로봇 이동 시 기본 속도
@@ -256,112 +262,56 @@ def detect_color_and_distance(frame, target_color="blue"):
 #    - 메인 스레드와 별도로 카메라를 계속 읽으면서 색을 찾음
 #    - 찾으면 좌표 변환하고 JSON 저장
 # ======================================================================
-def camera_capture_thread(stop_event, frame_container,
-                          target_color="blue", mc=None):
-    """
-    stop_event: 외부에서 True로 바꾸면 이 스레드가 종료되도록 하는 플래그
-    frame_container: 최신 프레임을 메인 스레드에 건네주기 위한 dict
-    target_color: 찾고 싶은 색상
-    mc: 로봇 객체 (여기서는 실제 이동 부분이 주석 처리돼 있음)
-    """
-    global picking_done
-
-    # 카메라 열기 (기본 0번 카메라)
+def camera_capture_thread(stop_event, frame_container):
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("⚠️ 카메라를 열 수 없습니다.")
         return
 
-    print(f"📷 카메라 스레드 시작 (타깃 색상: {target_color})")
-
-    # stop_event가 설정될 때까지 계속 반복
+    print("📷 카메라 스레드 시작 (프레임 송출 중...)")
     while not stop_event.is_set():
-        # 한 프레임 읽기
         ret, frame = cap.read()
         if not ret:
-            # 프레임을 못 받았으면 잠깐 쉬고 다음 루프
             time.sleep(0.01)
             continue
 
-        # 프레임에서 색 검출 + 거리/오프셋 계산
-        processed_frame, detected = detect_color_and_distance(
-            frame, target_color
-        )
+        frame_container["frame"] = frame  # 최신 프레임 공유
 
-        # 최신 프레임을 딕셔너리에 저장해서
-        # 메인 루프에서 화면에 띄울 수 있게 함
-        frame_container["frame"] = processed_frame
-
-        # detected 리스트 안에는 여러 개가 있을 수도 있지만
-        # 여기서는 감지된 것들을 한 번씩 돌면서 처리
-        for color_name, (cx, cy), dist, offset_x, offset_y in detected:
-            # 이미 한 번 좌표 저장이 끝났거나,
-            # 로봇 객체가 없으면(=카메라만 테스트 중이면) 스킵
-            if picking_done or mc is None:
-                continue
-
-            # 감지 정보 콘솔에 출력
-            print(
-                f"🎯 감지: {color_name} ({cx},{cy}) "
-                f"dist={dist:.1f}cm Δx={offset_x}"
-            )
-
-            # ----------------------------------------------------------------
-            # 아래 블록은 "감지된 물체를 화면 중앙에 오도록 로봇을 움직인다"는
-            # 실제 제어 예시인데, 지금은 테스트용이라 주석 처리해둔 상태
-            # 사용자가 환경에 맞게 기본 좌표, 보정 비율 등을 바꿔서 켜면 됨.
-            # ----------------------------------------------------------------
-            # # ✅ 실제 로봇(당신 테스트 기준)에 맞춘 X축 보정
-            # if abs(offset_x) > 15:
-            #     scale = 0.4  # mm/pixel
-            #     dx_mm = offset_x * scale
-            #
-            #     # 기본 기준점 (테스트 환경에서 물체가 있을 법한 위치)
-            #     base_x, base_y, base_z = -120.0, 0.0, 80.0
-            #
-            #     # offset_x가 클수록 x를 조금씩 조정
-            #     # 여기서는 "오른쪽으로 치우쳤으면 앞으로 가라"는 식의
-            #     # 사용자 환경에 맞춘 임의 보정이 들어감
-            #     adj_x = base_x - dx_mm * 0.5
-            #
-            #     print(f"🤖 X축 중심 보정(앞으로): Δx={offset_x} → 이동 X={adj_x:.2f}")
-            #     # 로봇에 좌표 명령 보내기
-            #     mc.send_coords([adj_x, base_y, base_z, 180, 0, 90], 20, 1)
-            #     time.sleep(1.5)
-            #
-            # # 중심 근처에 들어왔으면 좌표 저장
-            # if abs(offset_x) <= 10:
-            #     h, w, _ = frame.shape
-            #     coord = pixel_to_robot(cx, cy, dist, w, h)
-            #     save_pick_coordinate(coord)
-            #     picking_done = True
-            #     print(f"✅ 중심 정렬 완료 & 좌표 저장: {coord}")
-            #     time.sleep(1)
-
-    # while 종료 → 카메라 반납
     cap.release()
     print("📷 카메라 스레드 종료")
 
+
+
+def move_and_wait(mc, target, speed=20, mode=0, tol=30.0):
+    """
+    로봇이 목표 좌표에 도달할 때까지 대기
+    tol: 허용 오차 (mm)
+    """
+    time.sleep(0.5)
+    mc.send_coords(target, speed, mode)
+    time.sleep(0.5)
+    while True:
+        cur = mc.get_coords()  # 현재 좌표 [x,y,z,rx,ry,rz]
+        if cur and all(abs(c - t) < tol for c, t in zip(cur[:3], target[:3])):
+            break
+        time.sleep(0.2)
+    print(f"✅ 이동 완료 → {target}")
 
 # ======================================================================
 # 5. 로봇을 미리 정의한 포즈로 이동시키는 간단한 함수
 # ======================================================================
 def move_to(mc, name, speed=DEFAULT_SPEED):
     """
-    mc   : 로봇 객체
-    name : 위에서 정의한 POSES 딕셔너리의 키("Home", "Place" 등)
-    speed: 이동 속도
+    이름으로 정의된 POSES 좌표로 이동하고, 완료까지 대기
     """
     if name not in POSES:
         print(f"⚠️ Unknown pose: {name}")
         return
 
-    # 각도 기반이 아니라 좌표 기반 포맷이라면 send_coords를 써도 됨.
-    # 여기서는 send_angles가 아니라 send_angles와 비슷한 역할을 하는
-    # 명령을 쓴다고 보면 됨.
-    mc.send_angles(POSES[name], speed)
-    print(f"➡️ Move: {name}")
-    time.sleep(2)  # 이동이 끝날 때까지 잠깐 대기
+    target = POSES[name]
+    print(f"➡️ Move: {name} → {target}")
+    move_and_wait(mc, target, speed, mode=1)
+
 
 
 # ======================================================================
@@ -374,7 +324,6 @@ def move_to(mc, name, speed=DEFAULT_SPEED):
 def main():
     # ----------------------------------------
     # 1) 명령줄 인자 파싱
-    #    예) python this.py --color red --port COM3
     # ----------------------------------------
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=str, default="/dev/ttyACM0")
@@ -384,73 +333,177 @@ def main():
     args = parser.parse_args()
 
     # ----------------------------------------
-    # 2) 기존에 저장된 피킹 좌표가 있으면 지움
-    #    매 실행마다 새로 잡는다고 가정하는 흐름
+    # 2) 이전 피킹 데이터 삭제
     # ----------------------------------------
     if os.path.exists("picking_target.json"):
         os.remove("picking_target.json")
         print("🧹 이전 picking_target.json 삭제 완료")
 
-    # 최신 카메라 프레임을 다른 스레드와 공유하기 위한 컨테이너
-    # 딕셔너리로 한 이유는 참조를 공유해서 바로 값만 바꿀 수 있게 하려고
+    # ----------------------------------------
+    # 3) 카메라 스레드 준비
+    # ----------------------------------------
     frame_container = {"frame": None}
-
-    # 스레드를 멈출 때 쓰는 이벤트 객체
     stop_event = threading.Event()
 
     # ----------------------------------------
-    # 3) 로봇 연결
+    # 4) 로봇 연결
     # ----------------------------------------
-    mc = CobotClass(args.port, args.baud)  # 포트/보드레이트는 옵션에서
-    time.sleep(0.5)                        # 연결 안정화 대기
-    mc.power_on()                          # 서보 전원 ON
+    mc = CobotClass(args.port, args.baud)
+    time.sleep(0.5)
+    mc.power_on()
     print("🔌 Power ON 완료")
 
     # ----------------------------------------
-    # 4) 홈 포즈로 이동
+    # 5) 홈 포즈로 이동 (픽엄위치)
     # ----------------------------------------
     print("🏠 홈 위치로 이동 중...")
-    # 여기서는 좌표 기반 send_coords 사용 (POSES["Home"]이 좌표 포맷이라서)
-    mc.send_coords(POSES["Home"], args.speed)
-    time.sleep(3)  # 이동 완료까지 대기
-    print("✅ 홈 위치 도달 완료")
+    move_to(mc, "Home", args.speed)
+    # 그리퍼 예시
+    mc.set_gripper_mode(0)    
+    mc.set_electric_gripper(0)
+    mc.set_gripper_value(0, 20, 1)    # 100 = 완전 열림
 
     # ----------------------------------------
-    # 5) 카메라 스레드 시작
+    # 6) 카메라 스레드 시작 (프레임만 송출)
     # ----------------------------------------
     cam_thread = threading.Thread(
         target=camera_capture_thread,
-        args=(stop_event, frame_container, args.color, mc),
-        daemon=True  # 메인 프로그램 끝나면 자동 종료
+        args=(stop_event, frame_container),
+        daemon=True
     )
     cam_thread.start()
 
-    # ----------------------------------------
-    # 6) 메인 루프: 화면 띄우기 & q로 종료
-    # ----------------------------------------
-    print("✅ 메인 루프 시작 (q로 종료)")
-    while not stop_event.is_set():
-        # 카메라에서 최신으로 들어온 프레임 가져오기
-        frame = frame_container.get("frame")
-        if frame is not None:
-            # 윈도우에 출력
-            cv2.imshow("Camera View", frame)
 
-        # 키보드 입력 확인
-        # cv2.waitKey(1)은 1ms 대기 후 키 값을 받음
+    # ----------------------------------------
+    # 7) 메인 루프 (ROI 내 물체 감지 후 자동 저장)
+    # ----------------------------------------
+    print("✅ 메인 루프 시작 (q: 종료, ROI 감지 후 3초 자동 실행)")
+
+    roi_detect_start = None       # ROI 안에서 물체 감지를 시작한 시각
+    DETECT_HOLD_TIME = 3.0        # 3초 연속 감지되면 실행
+    PIXEL_TO_MM = 0.4             # 픽셀→mm 변환 비율 (실험 필요)
+
+    while not stop_event.is_set():
+        frame = frame_container.get("frame")
+        if frame is None:
+            continue
+
+        # ROI 표시
+        h, w, _ = frame.shape
+        roi_x1, roi_y1 = int(w * 0.3), int(h * 0.3)
+        roi_x2, roi_y2 = int(w * 0.7), int(h * 0.7)
+        cv2.rectangle(frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 0), 2)
+        cv2.drawMarker(frame, (w // 2, h // 2), (0, 255, 0),
+                    cv2.MARKER_CROSS, 15, 2)
+
+        # 색상 감지 수행
+        processed_frame, detected = detect_color_and_distance(frame.copy(), args.color)
+
+        # 감지된 물체가 ROI 안에 있는지 확인
+        in_roi = False
+        if detected:
+            _, (cx, cy), _, _, _ = detected[0]
+            if roi_x1 < cx < roi_x2 and roi_y1 < cy < roi_y2:
+                in_roi = True
+
+        # ROI 내 감지 타이머 처리
+        if in_roi:
+            if roi_detect_start is None:
+                roi_detect_start = time.time()
+                print("🔵 ROI 감지 시작 (3초 유지 시 자동 실행)")
+            else:
+                elapsed = time.time() - roi_detect_start
+                cv2.putText(frame, f"감지 중... {elapsed:.1f}s", (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+                if elapsed >= DETECT_HOLD_TIME:
+                    print("🟢 3초 유지 확인 → 좌표 계산 및 저장 시작")
+                    roi_detect_start = None  # 타이머 초기화
+
+                    # -----------------------------
+                    # 체커보드 기반 3D 좌표 변환
+                    # -----------------------------
+                    color_name, (cx, cy), dist, offset_x, offset_y = detected[0]
+
+                    fs = cv2.FileStorage("/home/vboxuser/robotarm/camera_info.yaml", cv2.FILE_STORAGE_READ)
+                    if not fs.isOpened():
+                        print("❌ camera_info.yaml 파일을 열 수 없습니다.")
+                        continue
+
+                    camera_matrix = fs.getNode("camera_matrix").mat()
+                    dist_coeffs = fs.getNode("distortion_coefficients").mat()
+                    fs.release()
+
+                    uv_point = np.array([[cx, cy]], dtype=np.float32)
+                    undistorted = cv2.undistortPoints(
+                        uv_point, camera_matrix, dist_coeffs, None, camera_matrix
+                    )
+                    Xc, Yc, Zc = undistorted[0][0][0], undistorted[0][0][1], 0.0
+
+                    Xc_mm = Xc * PIXEL_TO_MM
+                    Yc_mm = Yc * PIXEL_TO_MM
+                    Zc_mm = Zc * PIXEL_TO_MM
+
+                    R_cam2robot = np.eye(3)
+                    t_cam2robot = np.array([[120.0], [0.0], [30.0]])
+                    cam_point = np.array([[Xc_mm], [Yc_mm], [Zc_mm]])
+                    robot_point = R_cam2robot @ cam_point + t_cam2robot
+
+                    coord_data = {
+                        "x": float(robot_point[0][0]),
+                        "y": float(robot_point[1][0]),
+                        "z": float(robot_point[2][0])
+                    }
+
+                    save_pick_coordinate(coord_data)
+                    print(f"✅ 감지 결과 저장 완료 → X={coord_data['x']:.2f}, Y={coord_data['y']:.2f}, Z={coord_data['z']:.2f}")
+
+                    # --------------------------------
+                    # 💡 로봇 이동 (안전 범위 체크)
+                    # --------------------------------
+                    safe_x = max(min(coord_data["x"], 350), -350)
+                    safe_y = max(min(coord_data["y"], 350), -350)
+                    safe_z = max(min(coord_data["z"], 350), -350)
+
+                    print(f"🤖 로봇 이동 중: ({safe_x:.2f}, {safe_y:.2f}, {safe_z:.2f})")
+                    # mc.send_coords([safe_x, safe_y, safe_z, 180, 0, 90], args.speed)
+                    time.sleep(3)
+                    print("✅ 로봇 이동 완료, 다시 ROI 감지 대기 중...\n")
+                    break
+
+        else:
+            # ROI 밖으로 나가면 타이머 초기화
+            roi_detect_start = None
+
+        # 화면 출력
+        cv2.imshow("Camera View", processed_frame)
+
+        # q 키 종료
         if cv2.waitKey(1) & 0xFF == ord('q'):
-            # q를 누르면 stop_event를 세팅해서 모든 스레드 종료
             stop_event.set()
             break
 
-    # 메인 루프가 끝나면 스레드도 종료시킴
+    # ----------------------------------------
+    # 8) 종료 처리
+    # ----------------------------------------
     stop_event.set()
-    cam_thread.join()  # 카메라 스레드가 완전히 끝날 때까지 대기
-
-    # OpenCV 창 닫기
+    cam_thread.join()
     cv2.destroyAllWindows()
     print("🔒 종료")
 
+    # ----------------------------------------
+    # 9) place 기본 이동 (픽엄위치)
+    # ----------------------------------------
+    # 플레이스 기본 위치
+    print("플레이스 기본 위치로 이동 중...")
+    move_to(mc, "Place", args.speed)
+
+    #박스1 상단
+    print("플레이스 기본 위치로 이동 중...")
+    move_to(mc, "Box3_up", args.speed)
+    
+    #박스1
+    print("플레이스 기본 위치로 이동 중...")
+    move_to(mc, "Box3", args.speed)
 
 # ======================================================================
 # 7. 파이썬 스크립트 엔트리포인트
