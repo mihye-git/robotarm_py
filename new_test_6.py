@@ -40,6 +40,7 @@ POSES = {
 DEFAULT_SPEED = 20
 
 
+
 # ======================================================
 # 2️⃣ 카메라 보정값 로드
 # ======================================================
@@ -103,7 +104,9 @@ def detect_yolo(model, frame):
     if len(boxes) > 0:
         x1, y1, x2, y2 = boxes[0]
         cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-        detected_info.append(("object", (cx, cy), FIXED_DISTANCE_CM))
+        w_box, h_box = (x2 - x1), (y2 - y1)
+        bbox = (x1, y1, w_box, h_box)
+        detected_info.append(("object", (cx, cy), FIXED_DISTANCE_CM, bbox))  # ✅ bbox 포함
     return frame_vis, detected_info
 
 
@@ -161,6 +164,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
+    detected_angle = None     
+
     # YOLO 모델 로드
     print(f"🧠 YOLO 모델 로드 중: {args.model}")
     model = YOLO(args.model)
@@ -209,14 +214,44 @@ def main():
             cv2.rectangle(frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 0), 2)
             cv2.drawMarker(frame, (w // 2, h // 2), (0, 255, 0), cv2.MARKER_CROSS, 15, 2)
 
+            # YOLO 감지 수행
             processed_frame, detected = detect_yolo(model, frame)
             in_roi = False
+            angle = None  # 🔸 새로 추가: 각도 초기화
 
+            # 감지 결과 있을 때
             if detected:
-                _, (cx, cy), dist = detected[0]
+                _, (cx, cy), dist, bbox = detected[0]
                 if roi_x1 < cx < roi_x2 and roi_y1 < cy < roi_y2:
                     in_roi = True
 
+                    # -------------------------------
+                    # 🔸 YOLO bounding box 기반 각도 계산
+                    # -------------------------------
+                    # detect_yolo가 bounding box를 반환하는 경우 예시:
+                    # bbox = (x, y, w_box, h_box)
+                    if bbox is not None and isinstance(bbox, tuple):
+                        x, y, w_box, h_box = bbox
+                        # ROI 내 contour 박스 생성
+                        box_points = np.array([
+                            [x, y],
+                            [x + w_box, y],
+                            [x + w_box, y + h_box],
+                            [x, y + h_box]
+                        ])
+                        rect = cv2.minAreaRect(box_points)
+                        ((cx_rect, cy_rect), (bw, bh), angle) = rect
+                        detected_angle = angle 
+
+                        # 시각화 (박스 + 중심 + 각도 표시)
+                        box = cv2.boxPoints(rect)
+                        box = np.intp(box)
+                        cv2.drawContours(frame, [box], 0, (255, 255, 0), 2)
+                        cv2.circle(frame, (int(cx_rect), int(cy_rect)), 5, (0, 0, 255), -1)
+                        cv2.putText(frame, f"{angle:.1f} deg", (int(cx_rect) - 40, int(cy_rect) + 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            # ROI 내부에 감지된 경우 (3초 유지 시 좌표 확정)
             if in_roi:
                 if roi_detect_start is None:
                     roi_detect_start = time.time()
@@ -224,23 +259,47 @@ def main():
                 else:
                     elapsed = time.time() - roi_detect_start
                     cv2.putText(processed_frame, f"감지 중... {elapsed:.1f}s", (20, 40),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
                     if elapsed >= DETECT_HOLD_TIME:
                         print("🟢 감지 유지 3초 → 좌표 계산 시작")
                         detected_coord = pixel_to_robot(cx, cy, dist, camera_matrix, dist_coeffs)
-                        print(f"🎯 물체 좌표: {detected_coord}")
-                        # 감지된 물체 좌표
-                        # save_pick_coordinate(detected_coord)
+                        print(f"🎯 물체 좌표: {detected_coord}, 각도: {detected_angle}")  # ✅ 저장된 각도 출력
+                            
+                        # # -------------------------------
+                        # # 🔸 6축 회전 보정 (angle 기준)
+                        # # -------------------------------
+                        # if angle is not None:
+                        #     try:
+                        #         current_angles = mc.get_angles()
+                        #         rotation_correction = angle  # 필요 시 ± 방향 보정 테스트
+                        #         current_angles[5] += rotation_correction
+                        #         mc.send_angles(current_angles, 20)
+                        #         print(f"🔄 6축 회전 보정 완료 ({rotation_correction:.1f}°)")
+                        #     except Exception as e:
+                        #         print(f"⚠️ 회전 보정 중 오류 발생: {e}")
+                        
 
-                        # ✅ 카메라 종료
+                        # -------------------------------
+                        # 🔸 그리퍼 동작 (선택 사항)
+                        # -------------------------------
+                        try:
+                            mc.set_gripper_state(0, 80)   # 완전 열기
+                            mc.set_gripper_state(1, 80)   # 완전 열기
+                            print("🤖 그리퍼 동작 완료")
+                        except Exception as e:
+                            print(f"⚠️ 그리퍼 동작 중 오류 발생: {e}")
+
+                        # -------------------------------
+                        # ✅ 감지 완료 후 카메라 종료
+                        # -------------------------------
                         stop_event.set()
                         cam_thread.join()
                         cv2.destroyAllWindows()
                         print("📷 카메라 종료 완료")
-
                         break
             else:
                 roi_detect_start = None
+
 
             cv2.imshow("Camera View", processed_frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -257,15 +316,43 @@ def main():
     # ==================================================
     if detected_coord:
         print("🤖 로봇 이동 시작...")
+        mc.set_gripper_mode(0)
+        mc.set_electric_gripper(0)
         if not args.dry_run and mc:
-            mc.set_gripper_state(0, 80)   # 완전 열기
-            mc.send_coords([detected_coord["x"], detected_coord["y"], 300.0, -175.33, 8.65, 86.68], 25, 0)
+            base_r = -175.33
+            base_p = 8.65
+            base_y = 86.68
+            yaw_offset = (detected_angle if detected_angle is not None else 0.0) * 0.35
+            wrist_yaw = base_y + yaw_offset   # 📌 YOLO 각도 반영
+            print(f"🧭 Wrist 회전 적용: base_y={base_y:.1f}, offset={yaw_offset:.1f} → 최종={wrist_yaw:.1f}")
+
+
+            mc.set_gripper_value(50, 20, 1)  # 열림
+
+            # 위에서 접근
+            mc.send_coords(
+                [detected_coord["x"], detected_coord["y"], 300.0,
+                base_r, base_p, wrist_yaw],
+                25, 0
+            )
             time.sleep(3)
-            mc.send_coords([detected_coord["x"], detected_coord["y"], 260.0+30, -175.33, 8.65, 86.68], 15, 0)
+
+            # 내려가서 집기
+            mc.send_coords(
+                [detected_coord["x"], detected_coord["y"], 260.0+40,
+                base_r, base_p, wrist_yaw],
+                15, 0
+            )
             time.sleep(2)
-            mc.set_gripper_state(1, 80)   # 닫기
-            mc.send_coords([detected_coord["x"], detected_coord["y"], 260.0+100, -175.33, 8.65, 86.68], 15, 0)
-            time.sleep(2)
+
+            mc.set_gripper_value(8, 20, 1)  # 닫힘
+
+            # 위로 빼기
+            mc.send_coords(
+                [detected_coord["x"], detected_coord["y"], 260.0+100,
+                base_r, base_p, wrist_yaw],
+                15, 0
+            )
             #멈춤
             # exit()
             time.sleep(1.5)
