@@ -386,11 +386,13 @@ def main():
                     if not args.dry_run and mc is not None:
                         # 1) 물체 위로 이동
                         mc.set_gripper_state(0, 80)
+                        time.sleep(0.01)  # 🧠 GIL 해제 → 카메라 스레드도 돌 수 있게
                         time.sleep(1)
                         mc.send_coords(
                             [pick_x, pick_y, z_approach, PICK_RX, PICK_RY, PICK_RZ],
                             25, 1
                         )
+                        time.sleep(0.01)
                         time.sleep(5)
 
                         # 2) 집기 높이까지 내리기
@@ -398,6 +400,7 @@ def main():
                             [pick_x, pick_y, z_grasp, PICK_RX, PICK_RY, PICK_RZ],
                             15, 1
                         )
+                        time.sleep(0.01)
                         time.sleep(1.5)
 
                         # 3) 집기
